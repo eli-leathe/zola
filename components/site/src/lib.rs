@@ -6,6 +6,7 @@ mod queue;
 pub mod sass;
 pub mod sitemap;
 pub mod tpls;
+mod typst_images;
 
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
@@ -21,7 +22,7 @@ use walkdir::{DirEntry, WalkDir};
 use crate::queue::Queue;
 use config::{Config, IndexFormat, get_config};
 use content::{Library, Page, Section, Taxonomy};
-use errors::{Result, anyhow, bail};
+use errors::{Context, Result, anyhow, bail};
 use relative_path::RelativePathBuf;
 use render::{RenderCache, Renderer};
 use templates::load_tera;
@@ -463,6 +464,7 @@ impl Site {
         let permalinks = &self.permalinks;
         let tera = &self.tera;
         let config = &self.config;
+        let imageproc = &self.imageproc;
         let colocated_assets = self.library.colocated_assets.clone();
 
         // This is needed in the first place because of silly borrow checker
@@ -494,7 +496,20 @@ impl Site {
                     tera,
                     config,
                     insert_anchor,
-                )
+                )?;
+                if config.typst.enabled
+                    && page.file.path.extension().is_some_and(|ext| ext == "typ")
+                {
+                    page.content = typst_images::process(
+                        &page.content,
+                        &mut imageproc.lock().expect("Couldn't lock imageproc (Typst images)"),
+                        &config.typst.images,
+                    )
+                    .with_context(|| {
+                        format!("Failed to process Typst images in {}", page.file.path.display())
+                    })?;
+                }
+                Ok(())
             })
             .collect::<Result<()>>()?;
 
@@ -547,6 +562,18 @@ impl Site {
                 &self.config,
                 insert_anchor,
             )?;
+            if self.config.typst.enabled
+                && page.file.path.extension().is_some_and(|ext| ext == "typ")
+            {
+                page.content = typst_images::process(
+                    &page.content,
+                    &mut self.imageproc.lock().expect("Couldn't lock imageproc (Typst images)"),
+                    &self.config.typst.images,
+                )
+                .with_context(|| {
+                    format!("Failed to process Typst images in {}", page.file.path.display())
+                })?;
+            }
         }
 
         let library = Arc::make_mut(&mut self.library);

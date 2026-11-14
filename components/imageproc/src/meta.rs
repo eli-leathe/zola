@@ -5,12 +5,25 @@ use image::{ImageDecoder, ImageReader};
 use image::{ImageFormat, ImageResult};
 use serde::Serialize;
 use std::ffi::OsStr;
-use std::io::BufReader;
+use std::io::{BufRead, BufReader, Cursor, Seek};
 use std::path::Path;
 use svg_metadata::Metadata as SvgMetadata;
 
 use crate::get_rotated_size;
 use crate::helpers::{get_created_datetime, get_description};
+
+/// Whether re-encoding through the still-image pipeline would discard animation.
+pub fn is_animated(bytes: &[u8]) -> ImageResult<bool> {
+    Ok(match image::guess_format(bytes)? {
+        ImageFormat::WebP => {
+            image::codecs::webp::WebPDecoder::new(Cursor::new(bytes))?.has_animation()
+        }
+        ImageFormat::Png => image::codecs::png::PngDecoder::new(Cursor::new(bytes))?.is_apng()?,
+        // Conservatively preserve GIFs, including single-frame GIFs.
+        ImageFormat::Gif => true,
+        _ => false,
+    })
+}
 
 /// Size and format read cheaply with `image`'s `Reader`.
 #[derive(Debug)]
@@ -25,6 +38,16 @@ pub struct ImageMeta {
 impl ImageMeta {
     pub fn read(path: &Path) -> ImageResult<Self> {
         let reader = ImageReader::open(path).and_then(ImageReader::with_guessed_format)?;
+        Self::from_reader(reader, &path.to_string_lossy())
+    }
+
+    /// Read embedded image metadata without creating a temporary source file.
+    pub fn from_bytes(bytes: &[u8]) -> ImageResult<Self> {
+        let reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
+        Self::from_reader(reader, "embedded image")
+    }
+
+    fn from_reader<R: BufRead + Seek>(reader: ImageReader<R>, source: &str) -> ImageResult<Self> {
         let format = reader.format();
         let mut decoder = reader.into_decoder()?;
         let size = decoder.dimensions();
@@ -35,7 +58,7 @@ impl ImageMeta {
         let metadata = match exif::Reader::new().read_raw(metadata) {
             Ok(metadata) => metadata,
             Err(e) => {
-                log::warn!("Failed to parse exif for {}: {}", path.display(), e);
+                log::warn!("Failed to parse exif for {}: {}", source, e);
                 return Ok(Self { size, format, description: None, created: None });
             }
         };
@@ -131,4 +154,25 @@ pub fn read_image_metadata<P: AsRef<Path>>(path: P) -> Result<ImageMetaResponse>
         _ => ImageMeta::read(path).map(ImageMetaResponse::from).map_err(Into::into),
     }
     .with_context(err_context)
+}
+
+#[cfg(test)]
+mod embedded_tests {
+    use super::{ImageMeta, is_animated};
+    use image::{DynamicImage, ImageFormat};
+    use std::io::Cursor;
+
+    #[test]
+    fn embedded_metadata_and_animation_detection_use_memory_only() {
+        let mut encoded = Cursor::new(Vec::new());
+        DynamicImage::new_rgba8(2, 3).write_to(&mut encoded, ImageFormat::Png).unwrap();
+        let bytes = encoded.into_inner();
+        let metadata = ImageMeta::from_bytes(&bytes).unwrap();
+        assert_eq!(metadata.size, (2, 3));
+        assert_eq!(metadata.format, Some(ImageFormat::Png));
+        assert!(!is_animated(&bytes).unwrap());
+        assert!(is_animated(b"GIF89a").unwrap());
+        assert!(ImageMeta::from_bytes(b"not an image").is_err());
+        assert!(is_animated(b"not an image").is_err());
+    }
 }

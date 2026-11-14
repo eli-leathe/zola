@@ -3026,6 +3026,7 @@ dependencies = [
  "log",
  "rayon",
  "serde",
+ "sha2",
  "svg_metadata",
  "tempfile",
  "utils",
@@ -6244,6 +6245,7 @@ name = "site"
 version = "0.23.6"
 dependencies = [
  "ahash 0.8.12",
+ "base64 0.23.1",
  "config",
  "content",
  "criterion",

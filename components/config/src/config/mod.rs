@@ -37,6 +37,29 @@ pub enum ExcludePaginatedPagesInSitemap {
     All,
 }
 
+/// Settings for routing embedded Typst rasters through Zola's image processor.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TypstImages {
+    pub enabled: bool,
+    pub max_width: u32,
+    pub max_height: u32,
+    pub format: String,
+    pub quality: Option<u8>,
+}
+
+impl Default for TypstImages {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_width: 1600,
+            max_height: 1600,
+            format: "webp".into(),
+            quality: Some(80),
+        }
+    }
+}
+
 /// Native Typst page rendering. Disabled by default to preserve Markdown-only sites.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -46,11 +69,17 @@ pub struct Typst {
     pub prelude: Option<String>,
     /// Label of the metadata dictionary containing Zola page front matter.
     pub metadata_label: String,
+    pub images: TypstImages,
 }
 
 impl Default for Typst {
     fn default() -> Self {
-        Self { enabled: false, prelude: None, metadata_label: "zola".into() }
+        Self {
+            enabled: false,
+            prelude: None,
+            metadata_label: "zola".into(),
+            images: TypstImages::default(),
+        }
     }
 }
 

@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 serde = { workspace = true }
+sha2 = { workspace = true }
 fs-err = { workspace = true }
 kamadak-exif = "0.6"
 tempfile = "3"

@@ -49,9 +49,38 @@ styles** in the document head:
 `extra.typst_head` is reserved for generated Typst styles. HTML output bypasses
 both Tera content interpolation and Markdown rendering; Zola shortcodes and
 Markdown `@/` links are not processed inside Typst pages. Use Typst links and
-show rules instead. Typst handles syntax highlighting, MathML and embedded
-images/SVG. Zola does not currently construct a table of contents, collect links
-for link checking/backlinks, or calculate reading analytics for Typst pages.
+show rules instead. Typst handles syntax highlighting, MathML and SVG diagrams.
+Zola does not currently construct a table of contents, collect links for link
+checking/backlinks, or calculate reading analytics for Typst pages.
+
+## Images
+
+Typst exports raster images as embedded data URLs. The adapter queues PNG, JPEG
+and WebP images through **Zola's existing image processor**, then replaces their
+`src` attributes with the resulting asset URLs before template/feed rendering.
+Resizing, encoding, caching and pruning use the same pipeline as `resize_image`.
+Identical embedded images share an output asset across pages. No temporary
+source files or separate optimizer are needed.
+
+The defaults limit images to 1600 × 1600 pixels without upscaling, and encode
+WebP at quality 80. Configure these independently of your Typst show rules:
+
+```toml
+[typst.images]
+enabled = true
+max_width = 1600
+max_height = 1600
+format = "webp" # same output formats as resize_image, including "auto"
+quality = 80
+```
+
+Processed assets live in `static/processed_images/` and are copied to the build
+output and served normally by `zola serve`. Add `static/processed_images/` to
+`.gitignore`, as with other Zola-processed images. Generated asset URLs follow
+the configured base URL, including any path prefix. SVG diagrams remain inline;
+GIF and animated PNG/WebP images retain their original embedded representation
+to avoid losing animation. Set `enabled = false` to keep all embedded images
+unchanged.
 
 The site directory is the Typst project root. Package imports use Typst Kit's
 normal cache/downloader. Ignore helper `.typ` modules so they aren't discovered

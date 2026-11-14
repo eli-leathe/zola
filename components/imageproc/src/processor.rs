@@ -1,6 +1,8 @@
 use fs_err as fs;
-use std::io::{BufWriter, Write};
+use sha2::{Digest, Sha256};
+use std::io::{BufRead, BufReader, BufWriter, Cursor, Seek, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use ahash::{HashMap, HashSet};
 use config::Config;
@@ -23,10 +25,20 @@ use crate::{ImageMeta, ResizeInstructions, ResizeOperation, fix_orientation};
 
 pub const RESIZED_SUBDIR: &str = "processed_images";
 
+trait ImageInputReader: BufRead + Seek {}
+impl<T: BufRead + Seek> ImageInputReader for T {}
+
+fn embedded_source_id(bytes: &[u8]) -> String {
+    let hash = Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    format!("embedded-{hash}")
+}
+
 /// Holds all data needed to perform a resize operation
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ImageOp {
     input_path: PathBuf,
+    /// Immutable embedded sources share the file-backed processing/encoding path.
+    input_bytes: Option<Arc<[u8]>>,
     output_path: PathBuf,
     instr: ResizeInstructions,
     format: Format,
@@ -44,9 +56,14 @@ impl ImageOp {
         }
 
         log::debug!("processing {} with instructions {:?}", self.input_path.display(), self.instr);
-        let input_permissions = fs::metadata(&self.input_path)?.permissions();
-        let reader =
-            ImageReader::open(&self.input_path).and_then(ImageReader::with_guessed_format)?;
+        let (input, input_permissions): (Box<dyn ImageInputReader>, _) = match &self.input_bytes {
+            Some(bytes) => (Box::new(Cursor::new(bytes.clone())), None),
+            None => (
+                Box::new(BufReader::new(fs::File::open(&self.input_path)?)),
+                Some(fs::metadata(&self.input_path)?.permissions()),
+            ),
+        };
+        let reader = ImageReader::new(input).with_guessed_format()?;
         let mut decoder = reader.into_decoder()?;
         let color_profile = decoder.icc_profile().ok().flatten();
         let metadata = decoder.exif_metadata()?.and_then(|raw_metadata| {
@@ -159,7 +176,17 @@ impl ImageOp {
             }
         };
 
-        fs::set_permissions(&tmp_output_file, input_permissions)?;
+        if let Some(permissions) = input_permissions {
+            fs::set_permissions(&tmp_output_file, permissions)?;
+        } else {
+            // Embedded sources have no permissions to inherit. Make generated
+            // static assets readable by the web server, like ordinary images.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&tmp_output_file, std::fs::Permissions::from_mode(0o644))?;
+            }
+        }
         fs::rename(&tmp_output_file, &self.output_path)?;
 
         Ok(())
@@ -206,7 +233,7 @@ pub struct Processor {
     output_dir: PathBuf,
     img_ops: HashSet<ImageOp>,
     /// We want to make sure we only ever get metadata for an image once
-    meta_cache: HashMap<PathBuf, ImageMeta>,
+    meta_cache: HashMap<(PathBuf, bool), ImageMeta>,
 }
 
 impl Processor {
@@ -238,14 +265,57 @@ impl Processor {
         speed: Option<u8>,
         filter: &str,
     ) -> Result<EnqueueResponse> {
-        // First we load metadata from the cache if possible, otherwise from the file itself
-        if !self.meta_cache.contains_key(&input_path) {
-            let meta = ImageMeta::read(&input_path)
-                .with_context(|| format!("Failed to read image: {}", input_path.display()))?;
-            self.meta_cache.insert(input_path.clone(), meta);
+        self.enqueue_input(op, input_src, input_path, None, format, quality, speed, filter)
+    }
+
+    /// Enqueue an embedded raster using exactly the same resize operations,
+    /// encoders, output naming, deduplication and pruning as `resize_image`.
+    /// The content hash replaces the source path as the stable cache identity.
+    #[allow(clippy::too_many_arguments)]
+    pub fn enqueue_bytes(
+        &mut self,
+        op: ResizeOperation,
+        bytes: Vec<u8>,
+        format: &str,
+        quality: Option<u8>,
+        speed: Option<u8>,
+        filter: &str,
+    ) -> Result<EnqueueResponse> {
+        let id = embedded_source_id(&bytes);
+        self.enqueue_input(
+            op,
+            id.clone(),
+            PathBuf::from(id),
+            Some(bytes.into()),
+            format,
+            quality,
+            speed,
+            filter,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_input(
+        &mut self,
+        op: ResizeOperation,
+        input_src: String,
+        input_path: PathBuf,
+        input_bytes: Option<Arc<[u8]>>,
+        format: &str,
+        quality: Option<u8>,
+        speed: Option<u8>,
+        filter: &str,
+    ) -> Result<EnqueueResponse> {
+        let cache_key = (input_path.clone(), input_bytes.is_some());
+        if !self.meta_cache.contains_key(&cache_key) {
+            let meta = match &input_bytes {
+                Some(bytes) => ImageMeta::from_bytes(bytes),
+                None => ImageMeta::read(&input_path),
+            }
+            .with_context(|| format!("Failed to read image: {}", input_path.display()))?;
+            self.meta_cache.insert(cache_key.clone(), meta);
         }
-        // We will have inserted it just above
-        let meta = &self.meta_cache[&input_path];
+        let meta = &self.meta_cache[&cache_key];
         // We get the output format
         let format = Format::from_args(meta.is_lossy(), format, quality, speed)?;
         // and the resize filter
@@ -258,8 +328,10 @@ impl Processor {
         let instr = ResizeInstructions::new(op, meta.size);
         let enqueue_response = EnqueueResponse::new(url, static_path, meta, &instr);
         let img_op = ImageOp {
-            ignore: output_path.exists() && !ufs::file_stale(&input_path, &output_path),
+            ignore: output_path.exists()
+                && (input_bytes.is_some() || !ufs::file_stale(&input_path, &output_path)),
             input_path,
+            input_bytes,
             output_path,
             instr,
             format,
@@ -310,5 +382,39 @@ impl Processor {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod embedded_tests {
+    use super::embedded_source_id;
+    use crate::ResizeOperation;
+    use crate::format::Format;
+    use crate::helpers::get_processed_filename;
+    use image::imageops::FilterType;
+    use std::path::Path;
+
+    #[test]
+    fn embedded_names_are_content_addressed_and_include_processing_options() {
+        assert_eq!(
+            embedded_source_id(b"abc"),
+            "embedded-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let id = embedded_source_id(b"same image bytes");
+        assert_eq!(id, embedded_source_id(b"same image bytes"));
+        assert_ne!(id, embedded_source_id(b"changed image bytes"));
+        let filename = |size, quality| {
+            get_processed_filename(
+                Path::new(&id),
+                &id,
+                &ResizeOperation::Fit(size, size),
+                &Format::WebP { quality: Some(quality) },
+                FilterType::Lanczos3,
+            )
+        };
+        assert_eq!(filename(1600, 80), filename(1600, 80));
+        assert_ne!(filename(1600, 80), filename(800, 80));
+        assert_ne!(filename(1600, 80), filename(1600, 90));
+        assert!(filename(1600, 80).ends_with(".webp"));
     }
 }

@@ -4,7 +4,7 @@ mod theme;
 use std::path::Path;
 
 pub use crate::config::{
-    Config,
+    Config, Typst, TypstImages,
     languages::LanguageOptions,
     link_checker::LinkChecker,
     link_checker::LinkCheckerLevel,
