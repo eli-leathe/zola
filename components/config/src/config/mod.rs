@@ -37,6 +37,23 @@ pub enum ExcludePaginatedPagesInSitemap {
     All,
 }
 
+/// Native Typst page rendering. Disabled by default to preserve Markdown-only sites.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Typst {
+    pub enabled: bool,
+    /// Project-root-relative Typst module exporting `prelude(body)`.
+    pub prelude: Option<String>,
+    /// Label of the metadata dictionary containing Zola page front matter.
+    pub metadata_label: String,
+}
+
+impl Default for Typst {
+    fn default() -> Self {
+        Self { enabled: false, prelude: None, metadata_label: "zola".into() }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -112,6 +129,7 @@ pub struct Config {
     pub search: search::Search,
     /// The config for the Markdown rendering: syntax highlighting and everything
     pub markdown: markup::Markdown,
+    pub typst: Typst,
     /// All user params set in `[extra]` in the config
     pub extra: BTreeMap<String, Toml>,
     /// Enables the generation of Sitemap.xml
@@ -484,6 +502,7 @@ impl Default for Config {
             slugify: slugify::Slugify::default(),
             search: search::Search::default(),
             markdown: markup::Markdown::default(),
+            typst: Typst::default(),
             extra: BTreeMap::new(),
             generate_sitemap: true,
             generate_robots_txt: true,

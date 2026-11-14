@@ -180,8 +180,18 @@ impl Page {
     /// Read and parse a .md file into a Page struct
     pub fn from_file<P: AsRef<Path>>(path: P, config: &Config, base_path: &Path) -> Result<Page> {
         let path = path.as_ref();
-        let content = read_file(path)?;
-        let mut page = Page::parse(path, &content, config, base_path)?;
+        let mut page = if path.extension().is_some_and(|ext| ext == "typ") && config.typst.enabled {
+            let compiler = typst_render::Typst::new(base_path)?;
+            let compiled = compiler.compile(
+                path,
+                config.typst.prelude.as_deref(),
+                &config.typst.metadata_label,
+            )?;
+            Self::from_typst_output(path, compiled, config, base_path)?
+        } else {
+            let content = read_file(path)?;
+            Page::parse(path, &content, config, base_path)?
+        };
 
         if page.file.name == "index" {
             let parent_dir = path.parent().unwrap();
@@ -194,13 +204,43 @@ impl Page {
                     &page.assets,
                     page.file.path.parent().unwrap(),
                     colocated_path,
-                    &format!("{}index.md", colocated_path),
+                    &format!(
+                        "{}index.{}",
+                        colocated_path,
+                        path.extension().unwrap().to_string_lossy()
+                    ),
                 );
             }
         } else {
             page.assets = vec![];
         }
 
+        Ok(page)
+    }
+
+    /// Use the same front matter validation and routing as Markdown pages. Typst
+    /// output is already HTML: never pass it through Tera or the Markdown parser.
+    pub fn from_typst_output(
+        path: &Path,
+        compiled: typst_render::Compiled,
+        config: &Config,
+        base_path: &Path,
+    ) -> Result<Page> {
+        let mut metadata = compiled.metadata;
+        let object = metadata
+            .as_object_mut()
+            .ok_or_else(|| errors::anyhow!("Typst page metadata must be a dictionary"))?;
+        let extra = object.entry("extra").or_insert_with(|| serde_json::json!({}));
+        extra
+            .as_object_mut()
+            .ok_or_else(|| errors::anyhow!("Typst metadata extra must be a dictionary"))?
+            .insert("typst_head".into(), compiled.rendered.head.into());
+        let yaml = serde_yaml::to_string(&metadata)?;
+        let mut page = Page::parse(path, &format!("---\n{yaml}---\n"), config, base_path)?;
+        page.content = compiled.rendered.body;
+        // Source-code word counts would be misleading for a programming language.
+        page.word_count = None;
+        page.reading_time = None;
         Ok(page)
     }
 
@@ -247,6 +287,80 @@ mod tests {
     use crate::Page;
     use config::{Config, LanguageOptions};
     use utils::slugs::SlugifyStrategy;
+
+    fn typst_output(metadata: serde_json::Value) -> typst_render::Compiled {
+        typst_render::Compiled {
+            metadata,
+            rendered: typst_render::Rendered {
+                body: "<p>{{ untouched }} $x$</p>".into(),
+                head: "<style>.typst {}</style>".into(),
+            },
+        }
+    }
+
+    #[test]
+    fn typst_pages_use_zola_metadata_and_colocated_routes() {
+        let config = Config::default_for_test();
+        let page = Page::from_typst_output(
+            Path::new("content/notes/hello/index.typ"),
+            typst_output(serde_json::json!({
+                "title": "Hello", "date": "2026-09-24", "draft": true,
+                "taxonomies": {"tags": ["math"]},
+                "extra": {"custom": "kept"}
+            })),
+            &config,
+            Path::new(""),
+        )
+        .unwrap();
+        assert_eq!(page.path, "/notes/hello/");
+        assert_eq!(page.file.relative, "notes/hello/index.typ");
+        assert_eq!(page.file.colocated_path.as_deref(), Some("notes/hello/"));
+        assert!(page.meta.draft);
+        assert!(page.meta.datetime.is_some());
+        assert_eq!(page.meta.taxonomies["tags"], ["math"]);
+        assert_eq!(page.content, "<p>{{ untouched }} $x$</p>");
+        assert_eq!(
+            page.meta
+                .extra
+                .as_map()
+                .unwrap()
+                .get(&tera::value::Key::from("custom"))
+                .unwrap()
+                .as_str(),
+            Some("kept")
+        );
+        assert_eq!(
+            page.meta
+                .extra
+                .as_map()
+                .unwrap()
+                .get(&tera::value::Key::from("typst_head"))
+                .unwrap()
+                .as_str(),
+            Some("<style>.typst {}</style>")
+        );
+    }
+
+    #[test]
+    fn typst_metadata_gets_the_same_validation_as_markdown() {
+        for metadata in [
+            serde_json::json!([]),
+            serde_json::json!({"date": "invalid"}),
+            serde_json::json!({"slug": ""}),
+            serde_json::json!({"taxonomies": {"tags": [""]}}),
+            serde_json::json!({"extra": "not a dictionary"}),
+        ] {
+            assert!(
+                Page::from_typst_output(
+                    Path::new("content/note.typ"),
+                    typst_output(metadata),
+                    &Config::default_for_test(),
+                    Path::new("")
+                )
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn can_parse_a_valid_page() {

@@ -1,0 +1,12 @@
+[package]
+name = "typst-render"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+errors = { workspace = true }
+regex = { workspace = true }
+serde_json = { workspace = true }
+typst = "=0.15.1"
+typst-html = "=0.15.1"
+typst-kit = { version = "=0.15.1", features = ["datetime", "embedded-fonts", "emit-diagnostics", "scan-fonts", "system-files", "system-downloader"] }

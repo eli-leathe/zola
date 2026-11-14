@@ -19,6 +19,8 @@ walkdir = { workspace = true }
 errors = { workspace = true }
 utils = { workspace = true }
 config = { workspace = true }
+typst-render = { path = "../typst-render" }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 # TODO: can we solve that usecase in src/page.rs in a simpler way? A custom macro_rules! maybe

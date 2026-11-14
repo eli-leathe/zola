@@ -812,7 +812,10 @@ pub fn serve(
                                 let can_do_fast_reload =
                                     *event_kind != SimpleFileSystemEventKind::Remove;
 
-                                if fast_rebuild {
+                                // Typst imports, bibliographies and assets can affect any
+                                // page. Rebuild the site until dependency-aware incremental
+                                // compilation is implemented.
+                                if fast_rebuild && !site.config.typst.enabled {
                                     if can_do_fast_reload {
                                         let filename = full_path
                                             .file_name()

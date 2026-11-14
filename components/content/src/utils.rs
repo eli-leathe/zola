@@ -41,6 +41,7 @@ pub fn find_related_assets(path: &Path, config: &Config, recursive: bool) -> Vec
             match entry_path.extension() {
                 Some(e) => match e.to_str() {
                     Some("md") => continue,
+                    Some("typ") if config.typst.enabled => continue,
                     _ => assets.push(entry_path.to_path_buf()),
                 },
                 None => assets.push(entry_path.to_path_buf()),

@@ -11,6 +11,12 @@ in the [docs/content](docs/content) folder of this repository or visit the [Zola
 This tool and its template engine [tera](https://keats.github.io/tera/) were born from an intense dislike of the (insane) Golang template engine and therefore of
 Hugo that I was using before for 6+ sites.
 
+## Fork additions
+
+- [Native Typst HTML pages](docs/content/documentation/content/typst.md), enabled
+  with `[typst] enabled = true`, alongside Markdown and normal Zola templates,
+  taxonomies and feeds.
+
 ## List of features
 
 - [Single binary](https://www.getzola.org/documentation/getting-started/cli-usage/)

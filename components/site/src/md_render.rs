@@ -68,6 +68,10 @@ pub fn render_page(
     config: &Config,
     insert_anchor: InsertAnchor,
 ) -> Result<()> {
+    if config.typst.enabled && page.file.path.extension().is_some_and(|ext| ext == "typ") {
+        return Ok(());
+    }
+
     let skip_templating = config
         .skip_content_templating_globset
         .as_ref()
@@ -190,6 +194,33 @@ mod tests {
         cache: &'a RenderCache,
     ) -> Renderer<'a> {
         Renderer::new(&ZOLA_TERA, config, library, cache)
+    }
+
+    #[test]
+    fn typst_html_bypasses_markdown_and_content_templating() {
+        let mut config = Config::default_for_test();
+        config.typst.enabled = true;
+        let mut page = Page::parse(
+            Path::new("content/note.typ"),
+            "+++\ntitle = 'Typst'\n+++\n{{ missing }}",
+            &config,
+            Path::new(""),
+        )
+        .unwrap();
+        page.content = "<p>{{ missing }} $x$</p>".into();
+        let library = Library::default();
+        let cache = RenderCache::new(&config);
+        render_page(
+            &mut page,
+            make_renderer(&config, &library, &cache),
+            &HashMap::new(),
+            &AHashMap::new(),
+            &ZOLA_TERA,
+            &config,
+            InsertAnchor::None,
+        )
+        .unwrap();
+        assert_eq!(page.content, "<p>{{ missing }} $x$</p>");
     }
 
     #[test]

@@ -234,7 +234,9 @@ impl Site {
             }
 
             // skip hidden files and non md files
-            if !path.is_dir() && (!file_name.ends_with(".md") || file_name.starts_with('.')) {
+            let is_content = file_name.ends_with(".md")
+                || (self.config.typst.enabled && file_name.ends_with(".typ"));
+            if !path.is_dir() && (!is_content || file_name.starts_with('.')) {
                 continue;
             }
 
@@ -308,7 +310,7 @@ impl Site {
 
             // We are only checking it on load and not in add_page since we have access to
             // all the components there.
-            if page.file.filename == "index.md" {
+            if page.file.name == "index" {
                 let is_invalid = match page.components.last() {
                     Some(_) => sections.contains(&page.components.join("/")),
                     // content/index.md is always invalid, but content/colocated/index.md is ok

@@ -61,10 +61,11 @@ impl FileInfo {
         let canonical = parent.join(&name);
         let mut components =
             find_content_components(file_path.strip_prefix(base_path).unwrap_or(&file_path));
+        let filename = path.file_name().unwrap().to_string_lossy();
         let relative = if !components.is_empty() {
-            format!("{}/{}.md", components.join("/"), name)
+            format!("{}/{}", components.join("/"), filename)
         } else {
-            format!("{}.md", name)
+            filename.to_string()
         };
         let mut colocated_path = None;
 
